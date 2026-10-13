@@ -1,0 +1,52 @@
+opcua-nodeset-exporter
+Copyright 2026 Stefano Fago
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+-------------------------------------------------------------------------------
+Third-party software
+-------------------------------------------------------------------------------
+
+The runnable jar built by this project (opcua-nodeset-exporter.jar) bundles
+the following libraries, unmodified. Their license texts are in the licenses/
+directory of the repository and in META-INF/opcua-nodeset-exporter/ inside
+the jar.
+
+Eclipse Milo 1.1.7 (milo-sdk-client, milo-sdk-core, milo-stack-core,
+milo-transport, milo-guava-dependencies)
+  License: Eclipse Public License 2.0 (licenses/EPL-2.0.txt)
+  Source:  https://github.com/eclipse-milo/milo
+
+digitalpetri netty-channel-fsm 1.0.2 and strict-machine 1.0.0
+  License: Eclipse Public License 2.0 (licenses/EPL-2.0.txt)
+  Source:  https://github.com/digitalpetri/netty-channel-fsm
+           https://github.com/digitalpetri/strict-machine
+
+The source code of the EPL-2.0 components above is available at the URLs
+listed. They are distributed in this jar under the terms of the EPL-2.0.
+
+Netty 4.1.136.Final (netty-buffer, netty-codec, netty-common, netty-handler,
+netty-resolver, netty-transport, netty-transport-native-unix-common)
+  License: Apache License 2.0 (LICENSE)
+  Notice:  licenses/Netty-NOTICE.txt
+  Source:  https://github.com/netty/netty
+
+Guava 33.6.0-jre and failureaccess 1.0.3
+  License: Apache License 2.0 (LICENSE)
+  Source:  https://github.com/google/guava
+
+JCTools 4.0.5 (jctools-core)
+  License: Apache License 2.0 (LICENSE)
+  Source:  https://github.com/JCTools/JCTools
+
+Bouncy Castle 1.85 (bcprov-jdk18on, bcpkix-jdk18on, bcutil-jdk18on)
+  License: MIT (licenses/BouncyCastle-MIT.txt)
+  Source:  https://github.com/bcgit/bc-java
+
+SLF4J 2.0.18 (slf4j-api, slf4j-simple)
+  License: MIT (licenses/SLF4J-MIT.txt)
+  Source:  https://github.com/qos-ch/slf4j
+
+The test resource src/test/resources/UANodeSet.xsd is
+Copyright (C) 2026 OPC Foundation, licensed under the MIT License
+(SPDX header in the file). Source: https://github.com/OPCFoundation/UA-Nodeset
