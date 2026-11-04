@@ -1,6 +1,6 @@
 # opcua-nodeset-exporter
 
-Command line tool that connects to an OPC UA server, walks its address space and writes two files:
+Experimental Command line tool that connects to an OPC UA server, walks its address space and writes two files:
 
 - `<name>.NodeSet2.xml`: the node dictionary in UANodeSet format (OPC UA Part 6, Annex F);
 - `<name>.tags.csv`: a tag mapping with one row per variable, ready to open in Excel.
