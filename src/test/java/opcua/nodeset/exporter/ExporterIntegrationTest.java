@@ -416,6 +416,19 @@ class ExporterIntegrationTest {
   }
 
   @Test
+  void listEndpointsPrintsAndWritesNothing(@TempDir Path dir) throws Exception {
+    String text = ServerEndpoints.format(server.endpointUrl(), ServerEndpoints.get(server.endpointUrl()));
+    assertTrue(text.contains("1. None, mode None, SecurityLevel "), text);
+    assertTrue(text.contains("User tokens: Anonymous"), text);
+    assertTrue(text.endsWith("Usable by this exporter (SecurityPolicy None, anonymous): yes, endpoint 1\n"), text);
+
+    NodeSetExporter.run(options(dir, "--list-endpoints"));
+    try (var files = Files.list(dir)) {
+      assertEquals(0, files.count(), "--list-endpoints must not export");
+    }
+  }
+
+  @Test
   void unreachableServerFails() throws Exception {
     String url = "opc.tcp://localhost:" + PlantTestServer.unusedPort() + "/plant";
     assertThrows(UaException.class, () -> NodeSetExporter.run(NodeSetExporter.parse(new String[] {"--endpoint", url})));

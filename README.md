@@ -45,8 +45,9 @@ At the end `export/machine01.NodeSet2.xml` and `export/machine01.tags.csv` are w
 | `--model-version <v>` | none | Text, e.g. `1.0.0` |
 | `--publication-date <d>` | none | `2026-01-31` or `2026-01-31T10:00:00Z` |
 | `--report` | off | Flag, no value |
+| `--list-endpoints` | off | Flag, no value |
 
-`--endpoint`: server endpoint URL. The client asks the server for its endpoints and uses the first one with SecurityPolicy None and an anonymous token policy; if there is none, the run fails with `no endpoint selected`.
+`--endpoint`: server endpoint URL. The client asks the server for its endpoints and uses the first one with SecurityPolicy None and an anonymous token policy; if there is none, the run fails with `no endpoint selected` followed by the list of the endpoints the server offers.
 
 `--root`: node where the crawl starts. Repeat it to start from several nodes (`--root "ns=2;s=Tags" --root i=86`). Accepted forms: `i=85`, `ns=2;i=1001`, `ns=2;s=Tags`, `ns=2;g=<GUID>`, `ns=2;b=<base64>`. The namespace index is the server's one. Quote the value: in many shells `;` separates commands. The default `i=84` covers `Objects`, `Types` and `Views`; a narrower root is faster but leaves out the vendor types referenced by the exported nodes.
 
@@ -69,6 +70,8 @@ At the end `export/machine01.NodeSet2.xml` and `export/machine01.tags.csv` are w
 `--model-version`, `--publication-date`: Version and PublicationDate of the written Models when the server does not publish them in `Server/Namespaces` (NamespaceMetadata). Values published by the server always win. A date without time means midnight UTC.
 
 `--report`: also writes `<name>.report.md`: checks (schema validity, Models, PublicationDate, DataTypes with Definition, skipped nodes, crawl completeness, references to other servers dropped), the Models table with the source of each value, node counts per NodeClass and namespace, the DataTypes with their Definition source, and the references to nodes outside the export.
+
+`--list-endpoints`: calls GetEndpoints, without opening a session, prints the endpoints the server offers and exits without exporting. For each endpoint: SecurityPolicy, MessageSecurityMode, SecurityLevel, the URL advertised by the server and the accepted user tokens; then subject, expiry and SHA-1 thumbprint of the server certificate, and whether an endpoint usable by this exporter exists. All the other options except `--endpoint` are ignored.
 
 ## Examples
 
@@ -108,11 +111,17 @@ One namespace, with a publication date and the report:
 java -jar target/opcua-nodeset-exporter.jar --endpoint opc.tcp://my-server:4840 --namespace urn:example:machine --publication-date 2026-01-31 --report --name machine01
 ```
 
+Security offered by the server, without exporting:
+
+```
+java -jar target/opcua-nodeset-exporter.jar --endpoint opc.tcp://my-server:4840 --list-endpoints
+```
+
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
-| `0` | Export completed (check the log for WARN lines: skipped nodes, truncated crawl, Models without PublicationDate or more than one Model, NodeSet not valid with `--report`) |
+| `0` | Export completed, or endpoints printed with `--list-endpoints` (check the log for WARN lines: skipped nodes, truncated crawl, Models without PublicationDate or more than one Model, NodeSet not valid with `--report`) |
 | `1` | Export failed: connection, server error, unreadable root, `--namespace` not on the server, write error |
 | `2` | Invalid command line; the usage text is printed |
 
@@ -122,7 +131,7 @@ java -jar target/opcua-nodeset-exporter.jar --endpoint opc.tcp://my-server:4840 
 |---|---|
 | `java` not found | Java is not installed or not on the PATH |
 | `UnsupportedClassVersionError ... class file version 61.0` | Java is older than 17 |
-| `no endpoint selected` | The server offers no endpoint with SecurityPolicy None and anonymous access: not supported |
+| `no endpoint selected` | The server offers no endpoint with SecurityPolicy None and anonymous access: not supported. The endpoints it offers are listed after the message, or with `--list-endpoints` |
 | `Bad_ConnectionRejected` | Wrong host or port, server down, or port blocked by a firewall |
 | `Bad_SecurityChecksFailed`, then `Bad_ConnectionClosed` | The server cannot handle large multi-chunk responses: lower `--browse-batch` and `--read-batch` |
 | `the export is INCOMPLETE` | `--max-nodes` reached: run again with a higher value or `0` |
@@ -182,7 +191,7 @@ One row per Variable: `NodeId`, `NamespaceUri`, `BrowsePath`, `BrowseName`, `Dis
 
 ## Tests
 
-`mvnw clean package` (or `mvnw test`) runs 55 tests:
+`mvnw clean package` (or `mvnw test`) runs 59 tests:
 
 | Test class | What it covers |
 |---|---|
@@ -190,10 +199,11 @@ One row per Variable: `NodeId`, `NamespaceUri`, `BrowsePath`, `BrowseName`, `Dis
 | `NodeSetXmlWriterTest` | NodeSet XML: namespace remap, node classes, Models, Definitions, defaults, validity against `UANodeSet.xsd` |
 | `TagMappingCsvWriterTest` | CSV: BOM, CRLF, quoting, separators, AccessLevel bits, only Variables |
 | `NodeSetExporterTest` | Command line options, defaults, errors, server limits, size formatting |
+| `ServerEndpointsTest` | `--list-endpoints` text: policies, modes, user tokens, server certificate, usable endpoints |
 | `AddressSpaceCrawlerTest` | Attributes per NodeClass, NodeClass fallback read, dropped references, enum Definitions from properties |
 | `ProgressTest` | Time formatting, throttling, ETA |
 
-`PlantTestServer` publishes one namespace with every case the exporter must handle: a reference cycle, a custom hierarchical ReferenceType (nodes reachable only through it), custom ObjectType, VariableType and ReferenceType, a structure DataType with a DataTypeDefinition and an encoding node reachable only through HasEncoding, a simple DataType, an enumeration DataType with only an EnumStrings property, NamespaceMetadata for its namespace, a View, a Method with `Executable=false`, an AnalogItem with EngineeringUnits and EURange, an array variable with special characters in its description, a folder with 25 children, and a node visible in Browse whose attributes are denied. The integration tests also cover BrowseNext, `Bad_NoContinuationPoints` retries, server OperationLimits, `--max-nodes`, `--root`, `--csv-separator`, `--keep-endpoint-host`, `--namespace` (valid and unknown), `--report`, an unreadable root and an unreachable server.
+`PlantTestServer` publishes one namespace with every case the exporter must handle: a reference cycle, a custom hierarchical ReferenceType (nodes reachable only through it), custom ObjectType, VariableType and ReferenceType, a structure DataType with a DataTypeDefinition and an encoding node reachable only through HasEncoding, a simple DataType, an enumeration DataType with only an EnumStrings property, NamespaceMetadata for its namespace, a View, a Method with `Executable=false`, an AnalogItem with EngineeringUnits and EURange, an array variable with special characters in its description, a folder with 25 children, and a node visible in Browse whose attributes are denied. The integration tests also cover BrowseNext, `Bad_NoContinuationPoints` retries, server OperationLimits, `--max-nodes`, `--root`, `--csv-separator`, `--keep-endpoint-host`, `--namespace` (valid and unknown), `--report`, `--list-endpoints`, an unreadable root and an unreachable server.
 
 NodeSets tested with the OPC Foundation online [UA NodeSet Editor](https://uanodeseteditor.opcfoundation.org/).
 

@@ -1,6 +1,5 @@
 package opcua.nodeset.exporter;
 
-import static java.util.Objects.requireNonNullElse;
 import static org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned.uint;
 
 import java.nio.file.Files;
@@ -14,21 +13,17 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.stream.Stream;
 import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
 import org.eclipse.milo.opcua.sdk.client.OperationLimits;
 import org.eclipse.milo.opcua.stack.core.NamespaceTable;
 import org.eclipse.milo.opcua.stack.core.NodeIds;
 import org.eclipse.milo.opcua.stack.core.StatusCodes;
 import org.eclipse.milo.opcua.stack.core.UaException;
-import org.eclipse.milo.opcua.stack.core.security.SecurityPolicy;
 import org.eclipse.milo.opcua.stack.core.types.builtin.LocalizedText;
 import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UShort;
-import org.eclipse.milo.opcua.stack.core.types.enumerated.UserTokenType;
 import org.eclipse.milo.opcua.stack.core.types.structured.EndpointDescription;
-import org.eclipse.milo.opcua.stack.core.types.structured.UserTokenPolicy;
 import org.eclipse.milo.opcua.stack.core.util.EndpointUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,6 +51,7 @@ public final class NodeSetExporter {
         --model-version <v>   Model Version when the server NamespaceMetadata has none
         --publication-date <d> Model PublicationDate when the server has none (2026-01-31 or ISO-8601 instant)
         --report              also write <out>/<name>.report.md (checks, Models, DataTypes)
+        --list-endpoints      print the server endpoints (security, user tokens, certificate) and exit
 
       Output: <out>/<name>.NodeSet2.xml and <out>/<name>.tags.csv
       Only SecurityPolicy None with anonymous identity is supported.
@@ -75,7 +71,8 @@ public final class NodeSetExporter {
       String namespaceUri,
       String modelVersion,
       Instant publicationDate,
-      boolean report) {}
+      boolean report,
+      boolean listEndpoints) {}
 
   private NodeSetExporter() {}
 
@@ -113,6 +110,7 @@ public final class NodeSetExporter {
     String modelVersion = null;
     Instant publicationDate = null;
     boolean report = false;
+    boolean listEndpoints = false;
 
     for (int i = 0; i < args.length; i++) {
       String a = args[i];
@@ -144,6 +142,7 @@ public final class NodeSetExporter {
         case "--model-version" -> modelVersion = value(args, ++i, a);
         case "--publication-date" -> publicationDate = dateValue(value(args, ++i, a));
         case "--report" -> report = true;
+        case "--list-endpoints" -> listEndpoints = true;
         default -> throw new IllegalArgumentException("unknown option: " + a);
       }
     }
@@ -155,7 +154,7 @@ public final class NodeSetExporter {
     }
     return new Options(
         endpoint, List.copyOf(roots), outDir, name, browseBatch, readBatch, maxNodes, separator,
-        keepHost, progressSeconds, namespaceUri, modelVersion, publicationDate, report);
+        keepHost, progressSeconds, namespaceUri, modelVersion, publicationDate, report, listEndpoints);
   }
 
   static Instant dateValue(String s) {
@@ -187,6 +186,10 @@ public final class NodeSetExporter {
   }
 
   static void run(Options o) throws Exception {
+    if (o.listEndpoints()) {
+      System.out.print(ServerEndpoints.format(o.endpoint(), ServerEndpoints.get(o.endpoint())));
+      return;
+    }
     Progress total = new Progress(o.progressSeconds());
     OpcUaClient client = createClient(o);
     client.connect();
@@ -319,24 +322,34 @@ public final class NodeSetExporter {
     String host = EndpointUtil.getHost(o.endpoint());
     int port = EndpointUtil.getPort(o.endpoint());
 
-    return OpcUaClient.create(
-        o.endpoint(),
-        endpoints ->
-            endpoints.stream()
-                .filter(NodeSetExporter::isNoneAnonymous)
+    // The endpoints returned by GetEndpoints, kept to explain a failed selection.
+    List<EndpointDescription> offered = new ArrayList<>();
+    try {
+      return OpcUaClient.create(
+          o.endpoint(),
+          endpoints -> {
+            offered.clear();
+            offered.addAll(endpoints);
+            return endpoints.stream()
+                .filter(ServerEndpoints::isNoneAnonymous)
                 .findFirst()
-                .map(e -> o.keepEndpointHost() ? e : EndpointUtil.updateUrl(e, host, port)),
-        transport -> {},
-        config ->
-            config
-                .setApplicationName(LocalizedText.english("opcua-nodeset-exporter"))
-                .setApplicationUri("urn:opcua-nodeset-exporter:client")
-                .setRequestTimeout(uint(60_000)));
-  }
-
-  private static boolean isNoneAnonymous(EndpointDescription e) {
-    return SecurityPolicy.None.getUri().equals(e.getSecurityPolicyUri())
-        && Stream.of(requireNonNullElse(e.getUserIdentityTokens(), new UserTokenPolicy[0]))
-            .anyMatch(p -> p.getTokenType() == UserTokenType.Anonymous);
+                .map(e -> o.keepEndpointHost() ? e : EndpointUtil.updateUrl(e, host, port));
+          },
+          transport -> {},
+          config ->
+              config
+                  .setApplicationName(LocalizedText.english("opcua-nodeset-exporter"))
+                  .setApplicationUri("urn:opcua-nodeset-exporter:client")
+                  .setRequestTimeout(uint(60_000)));
+    } catch (UaException e) {
+      if (!offered.isEmpty() && offered.stream().noneMatch(ServerEndpoints::isNoneAnonymous)) {
+        throw new UaException(
+            StatusCodes.Bad_ConfigurationError,
+            "no endpoint selected: the server offers no endpoint with SecurityPolicy None and anonymous access\n"
+                + ServerEndpoints.format(o.endpoint(), offered),
+            e);
+      }
+      throw e;
+    }
   }
 }

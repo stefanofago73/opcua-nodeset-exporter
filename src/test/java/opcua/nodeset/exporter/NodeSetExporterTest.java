@@ -106,7 +106,7 @@ class NodeSetExporterTest {
         List.of(
             "--endpoint", "--root", "--out", "--name", "--browse-batch", "--read-batch",
             "--max-nodes", "--csv-separator", "--keep-endpoint-host", "--progress-seconds",
-            "--namespace", "--model-version", "--publication-date", "--report")) {
+            "--namespace", "--model-version", "--publication-date", "--report", "--list-endpoints")) {
       assertTrue(NodeSetExporter.USAGE.contains(opt), opt);
     }
   }
@@ -135,5 +135,11 @@ class NodeSetExporterTest {
         "invalid date for --publication-date: 31/01/2026",
         error("--endpoint", "x", "--publication-date", "31/01/2026"));
     assertEquals("missing value for --namespace", error("--endpoint", "x", "--namespace"));
+  }
+
+  @Test
+  void listEndpointsOption() {
+    assertFalse(parse("--endpoint", "x").listEndpoints());
+    assertTrue(parse("--endpoint", "x", "--list-endpoints").listEndpoints());
   }
 }
