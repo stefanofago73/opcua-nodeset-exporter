@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -32,6 +33,8 @@ import org.w3c.dom.Element;
 class ExporterIntegrationTest {
 
   private static PlantTestServer server;
+
+  private static final int PLANT_VARIABLES = 8 + PlantTestServer.MANY_CHILDREN;
 
   private static final Set<String> EXPECTED_PLANT_NODES = expectedPlantNodes();
 
@@ -63,9 +66,17 @@ class ExporterIntegrationTest {
             "Types/MachineType",
             "Types/SpeedType",
             "Types/MachineState",
+            "Types/MachineState/EnumStrings",
+            "Types/Recipe",
+            "Types/Recipe/DefaultBinary",
+            "Types/Percent",
             "Types/Feeds",
             "Types/HasStation",
-            "Views/MaintenanceView")) {
+            "Views/MaintenanceView",
+            "Server/Namespaces/Plant",
+            "Server/Namespaces/Plant/NamespaceUri",
+            "Server/Namespaces/Plant/NamespaceVersion",
+            "Server/Namespaces/Plant/NamespacePublicationDate")) {
       s.add("ns=1;s=" + id);
     }
     for (int i = 0; i < PlantTestServer.MANY_CHILDREN; i++) {
@@ -148,10 +159,10 @@ class ExporterIntegrationTest {
     assertEquals("3", counters.getAttribute("AccessLevel"));
     assertEquals("250.0", counters.getAttribute("MinimumSamplingInterval"));
     assertEquals("true", counters.getAttribute("Historizing"));
-    assertEquals("Contatori; \"zona\" 1\nriga 2 °C", ns.childText("ns=1;s=Plant/Machine1/Counters", "Description"));
+    assertEquals("Counters; \"zone\" 1\nline 2 °C", ns.childText("ns=1;s=Plant/Machine1/Counters", "Description"));
     Element description =
         (Element) counters.getElementsByTagNameNS(NodeSetXmlWriter.UA_NODESET_NS, "Description").item(0);
-    assertEquals("it", description.getAttribute("Locale"));
+    assertEquals("en-GB", description.getAttribute("Locale"));
 
     Element temperature = ns.node("ns=1;s=Plant/Machine1/Temperature");
     assertEquals("i=11", temperature.getAttribute("DataType"));
@@ -228,8 +239,9 @@ class ExporterIntegrationTest {
     }
     Map<String, List<String>> byPath =
         data.stream().collect(Collectors.toMap(r -> r.get(2), r -> r, (a, b) -> a));
-    // Temperature, its 2 properties, Counters, 25 tags; Secret is skipped.
-    assertEquals(4 + PlantTestServer.MANY_CHILDREN, data.size());
+    // Temperature, its 2 properties, Counters, 25 tags, EnumStrings of MachineState, the 3
+    // NamespaceMetadata properties; Secret is skipped.
+    assertEquals(PLANT_VARIABLES, data.size());
     assertFalse(byPath.containsKey("Root/Objects/Plant/Machine1/Secret"));
 
     List<String> temp = byPath.get("Root/Objects/Plant/Machine1/Temperature");
@@ -241,7 +253,7 @@ class ExporterIntegrationTest {
     assertEquals("0.0..250.0", temp.get(14));
 
     List<String> counters = byPath.get("Root/Objects/Plant/Machine1/Counters");
-    assertEquals("Contatori; \"zona\" 1\nriga 2 °C", counters.get(5));
+    assertEquals("Counters; \"zone\" 1\nline 2 °C", counters.get(5));
     assertEquals("Int32", counters.get(7));
     assertEquals("1", counters.get(8));
     assertEquals("4", counters.get(9));
@@ -390,7 +402,7 @@ class ExporterIntegrationTest {
     NodeSetExporter.run(options(dir, "--csv-separator", ",", "--keep-endpoint-host", "--progress-seconds", "1"));
     List<List<String>> rows = TestSupport.parseCsv(dir.resolve("plant.tags.csv"), ',');
     assertEquals(TagMappingCsvWriter.HEADER, rows.get(0));
-    assertEquals(4 + PlantTestServer.MANY_CHILDREN, plantRows(rows).size());
+    assertEquals(PLANT_VARIABLES, plantRows(rows).size());
   }
 
   @Test
@@ -415,6 +427,96 @@ class ExporterIntegrationTest {
     List<List<String>> rows = TestSupport.parseCsv(dir.resolve("plant.tags.csv"), ';');
     List<List<String>> plant = plantRows(rows);
     assertFalse(plant.isEmpty());
-    assertTrue(plant.stream().allMatch(r -> r.get(2).startsWith("Root/Objects/Plant/")));
+    assertTrue(plant.stream().allMatch(r -> r.get(2).startsWith("Root/")));
+    assertTrue(plant.stream().anyMatch(r -> r.get(2).equals("Root/Objects/Plant/Machine1/Temperature")));
+  }
+
+  @Test
+  void modelsAndDataTypeDefinitionsComeFromTheServer(@TempDir Path dir) throws Exception {
+    NodeSetExporter.run(options(dir));
+    Path xml = dir.resolve("plant.NodeSet2.xml");
+    TestSupport.validateNodeSet(xml);
+    TestSupport.NodeSet ns = TestSupport.parseNodeSet(xml);
+
+    // Version and PublicationDate from Server/Namespaces. The OPC UA RequiredModel takes the
+    // values Milo publishes for ns=0 (they change with the Milo version, so only the URI is checked).
+    List<String> required =
+        ns.models().get(PlantTestServer.NAMESPACE_URI + "|" + PlantTestServer.MODEL_VERSION + "|2026-01-15T00:00:00Z");
+    assertTrue(required != null, "plant Model missing: " + ns.models().keySet());
+    assertTrue(required.get(0).startsWith(NodeSetXmlWriter.UA_NAMESPACE_URI + "|"), required.get(0));
+
+    // Recipe: its encoding node is reached through HasEncoding.
+    assertTrue(ns.references("ns=1;s=Types/Recipe").contains("i=38|true|ns=1;s=Types/Recipe/DefaultBinary"));
+    assertEquals("UAObject", ns.node("ns=1;s=Types/Recipe/DefaultBinary").getLocalName());
+
+    // Recipe: DataTypeDefinition attribute.
+    assertEquals("1:Recipe", ns.definition("ns=1;s=Types/Recipe").getAttribute("Name"));
+    List<Map<String, String>> fields = ns.fields("ns=1;s=Types/Recipe");
+    assertEquals(List.of("Name", "Speed", "Steps", "State"), fields.stream().map(f -> f.get("Name")).toList());
+    assertEquals("Recipe name", fields.get(0).get("Description"));
+    assertEquals("1", fields.get(2).get("ValueRank"));
+    assertEquals("ns=1;s=Types/MachineState", fields.get(3).get("DataType"));
+
+    // MachineState: no DataTypeDefinition, built from the EnumStrings property.
+    List<Map<String, String>> states = ns.fields("ns=1;s=Types/MachineState");
+    assertEquals(
+        List.of("Stopped|0", "Running|1", "Fault|2"),
+        states.stream().map(f -> f.get("Name") + "|" + f.get("Value")).toList());
+  }
+
+  @Test
+  void namespaceOptionExportsOneModel(@TempDir Path dir) throws Exception {
+    NodeSetExporter.run(options(dir, "--namespace", PlantTestServer.NAMESPACE_URI));
+    Path xml = dir.resolve("plant.NodeSet2.xml");
+    TestSupport.validateNodeSet(xml);
+    TestSupport.NodeSet ns = TestSupport.parseNodeSet(xml);
+    assertEquals(1, ns.models().size(), ns.models().keySet().toString());
+    assertEquals(EXPECTED_PLANT_NODES, new TreeSet<>(ns.nodes().keySet()));
+    List<List<String>> rows = TestSupport.parseCsv(dir.resolve("plant.tags.csv"), ';');
+    assertEquals(PLANT_VARIABLES, rows.size() - 1, "CSV has only the plant namespace");
+  }
+
+  @Test
+  void unknownNamespaceFails(@TempDir Path dir) {
+    IllegalArgumentException e =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> NodeSetExporter.run(options(dir, "--namespace", "urn:does:not:exist")));
+    assertTrue(e.getMessage().contains("not an exportable namespace"), e.getMessage());
+  }
+
+  @Test
+  void reportSummarisesTheExport(@TempDir Path dir) throws Exception {
+    NodeSetExporter.run(options(dir, "--namespace", PlantTestServer.NAMESPACE_URI, "--report"));
+    String md = Files.readString(dir.resolve("plant.report.md"));
+    for (String expected :
+        List.of(
+            "| Schema UANodeSet.xsd | OK | every tool |",
+            "| Models present | yes | ModelCompiler, Cloud Library |",
+            "| Exactly one Model | yes (1) | Cloud Library (use --namespace) |",
+            "| PublicationDate on every Model | yes | Cloud Library |",
+            "| DataTypes with Definition | 2 of 2 (simple types: 1) | code generators |",
+            "| Nodes skipped (not readable) | 1 | - |",
+            "### " + PlantTestServer.NAMESPACE_URI,
+            "- Version: 1.2.0 (server)",
+            "- PublicationDate: 2026-01-15T00:00:00Z (server)",
+            "| Recipe | Structure | 4 | DataTypeDefinition |",
+            "| MachineState | Enumeration | 3 | EnumStrings |",
+            "| Percent | Simple | - | not needed (subtype of i=11) |",
+            // Machine1 HasComponent Secret: Secret is not readable, so it is a missing node of an
+            // exported namespace, not a namespace to provide.
+            "Nodes missing from namespaces that are in this NodeSet: not reached by the crawl or not readable.",
+            "| " + PlantTestServer.NAMESPACE_URI + " | i=47 | 1 |",
+            "- ns=1: " + PlantTestServer.NAMESPACE_URI)) {
+      assertTrue(md.contains(expected), "missing in report: " + expected + "\n" + md);
+    }
+  }
+
+  @Test
+  void validationReportsTheFirstSchemaError(@TempDir Path dir) throws Exception {
+    Path bad = dir.resolve("bad.xml");
+    Files.writeString(bad, "<UANodeSet xmlns=\"" + NodeSetXmlWriter.UA_NODESET_NS + "\"><Bogus/></UANodeSet>");
+    String error = ExportReport.validate(bad);
+    assertTrue(error != null && error.startsWith("line 1"), String.valueOf(error));
   }
 }

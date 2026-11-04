@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.net.ServerSocket;
 import java.security.KeyPair;
 import java.security.cert.X509Certificate;
+import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import org.eclipse.milo.opcua.sdk.core.AccessLevel;
@@ -48,6 +49,7 @@ import org.eclipse.milo.opcua.stack.core.security.SecurityPolicy;
 import org.eclipse.milo.opcua.stack.core.transport.TransportProfile;
 import org.eclipse.milo.opcua.stack.core.types.UaStructuredType;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
+import org.eclipse.milo.opcua.stack.core.types.builtin.DateTime;
 import org.eclipse.milo.opcua.stack.core.types.builtin.ExpandedNodeId;
 import org.eclipse.milo.opcua.stack.core.types.builtin.ExtensionObject;
 import org.eclipse.milo.opcua.stack.core.types.builtin.LocalizedText;
@@ -56,8 +58,11 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.QualifiedName;
 import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.MessageSecurityMode;
+import org.eclipse.milo.opcua.stack.core.types.enumerated.StructureType;
 import org.eclipse.milo.opcua.stack.core.types.structured.EUInformation;
 import org.eclipse.milo.opcua.stack.core.types.structured.Range;
+import org.eclipse.milo.opcua.stack.core.types.structured.StructureDefinition;
+import org.eclipse.milo.opcua.stack.core.types.structured.StructureField;
 import org.eclipse.milo.opcua.stack.core.util.SelfSignedCertificateBuilder;
 import org.eclipse.milo.opcua.stack.core.util.SelfSignedCertificateGenerator;
 import org.eclipse.milo.opcua.stack.transport.server.tcp.OpcTcpServerTransport;
@@ -67,6 +72,8 @@ final class PlantTestServer {
 
   static final String NAMESPACE_URI = "urn:opcua-nodeset-exporter:test:plant";
   static final int MANY_CHILDREN = 25;
+  static final String MODEL_VERSION = "1.2.0";
+  static final Instant MODEL_PUBLICATION_DATE = Instant.parse("2026-01-15T00:00:00Z");
 
   private final OpcUaServer server;
   private final PlantNamespace namespace;
@@ -236,6 +243,57 @@ final class PlantTestServer {
               uint(0),
               false);
       add(machineState, NodeIds.HasSubtype, NodeIds.Enumeration);
+      propertyValue(
+          machineState,
+          "EnumStrings",
+          NodeIds.LocalizedText,
+          1,
+          new LocalizedText[] {
+            LocalizedText.english("Stopped"), LocalizedText.english("Running"), LocalizedText.english("Fault")
+          });
+
+      var recipe =
+          new UaDataTypeNode(
+              getNodeContext(),
+              newNodeId("Types/Recipe"),
+              newQualifiedName("Recipe"),
+              LocalizedText.english("Recipe"),
+              LocalizedText.NULL_VALUE,
+              uint(0),
+              uint(0),
+              false);
+      recipe.setDataTypeDefinition(
+          new StructureDefinition(
+              NodeId.NULL_VALUE,
+              NodeIds.Structure,
+              StructureType.Structure,
+              new StructureField[] {
+                new StructureField("Name", LocalizedText.english("Recipe name"), NodeIds.String, -1, null, uint(0), false),
+                new StructureField("Speed", LocalizedText.NULL_VALUE, NodeIds.Double, -1, null, uint(0), false),
+                new StructureField("Steps", LocalizedText.NULL_VALUE, NodeIds.Int32, 1, new UInteger[] {uint(0)}, uint(0), false),
+                new StructureField("State", LocalizedText.NULL_VALUE, machineState.getNodeId(), -1, null, uint(0), false)
+              }));
+      add(recipe, NodeIds.HasSubtype, NodeIds.Structure);
+      UaObjectNode recipeBinary =
+          new UaObjectNode.UaObjectNodeBuilder(getNodeContext())
+              .setNodeId(newNodeId("Types/Recipe/DefaultBinary"))
+              .setBrowseName(new QualifiedName(0, "Default Binary"))
+              .setDisplayName(LocalizedText.english("Default Binary"))
+              .setTypeDefinition(NodeIds.DataTypeEncodingType)
+              .build();
+      add(recipeBinary, NodeIds.HasEncoding, recipe.getNodeId());
+
+      var percent =
+          new UaDataTypeNode(
+              getNodeContext(),
+              newNodeId("Types/Percent"),
+              newQualifiedName("Percent"),
+              LocalizedText.english("Percent"),
+              LocalizedText.NULL_VALUE,
+              uint(0),
+              uint(0),
+              false);
+      add(percent, NodeIds.HasSubtype, NodeIds.Double);
 
       var feeds =
           new UaReferenceTypeNode(
@@ -302,7 +360,7 @@ final class PlantTestServer {
 
       UaVariableNode counters =
           variable("Plant/Machine1/Counters", "Counters", NodeIds.Int32, NodeIds.BaseDataVariableType)
-              .setDescription(new LocalizedText("it", "Contatori; \"zona\" 1\nriga 2 °C"))
+              .setDescription(new LocalizedText("en-GB", "Counters; \"zone\" 1\nline 2 °C"))
               .setValueRank(1)
               .setArrayDimensions(new UInteger[] {uint(4)})
               .setAccessLevel(AccessLevel.READ_WRITE)
@@ -378,6 +436,36 @@ final class PlantTestServer {
               true,
               ubyte(0));
       add(view, NodeIds.Organizes, NodeIds.ViewsFolder);
+
+      // --- namespace metadata (Server/Namespaces) ---------------------------------------------
+      UaObjectNode metadata =
+          new UaObjectNode.UaObjectNodeBuilder(getNodeContext())
+              .setNodeId(newNodeId("Server/Namespaces/Plant"))
+              .setBrowseName(new QualifiedName(0, NAMESPACE_URI))
+              .setDisplayName(LocalizedText.english(NAMESPACE_URI))
+              .setTypeDefinition(NodeIds.NamespaceMetadataType)
+              .build();
+      add(metadata, NodeIds.HasComponent, NodeIds.Server_Namespaces);
+      propertyValue(metadata, "NamespaceUri", NodeIds.String, -1, NAMESPACE_URI);
+      propertyValue(metadata, "NamespaceVersion", NodeIds.String, -1, MODEL_VERSION);
+      propertyValue(
+          metadata, "NamespacePublicationDate", NodeIds.DateTime, -1, new DateTime(MODEL_PUBLICATION_DATE));
+    }
+
+    private void propertyValue(UaNode owner, String name, NodeId dataType, int valueRank, Object value) {
+      UaVariableNode p =
+          new UaVariableNode.UaVariableNodeBuilder(getNodeContext())
+              .setNodeId(newNodeId(owner.getNodeId().getIdentifier() + "/" + name))
+              .setBrowseName(new QualifiedName(0, name))
+              .setDisplayName(LocalizedText.english(name))
+              .setDataType(dataType)
+              .setValueRank(valueRank)
+              .setTypeDefinition(NodeIds.PropertyType)
+              .setAccessLevel(AccessLevel.CurrentRead)
+              .setUserAccessLevel(AccessLevel.CurrentRead)
+              .setValue(new DataValue(new Variant(value)))
+              .build();
+      add(p, NodeIds.HasProperty, owner.getNodeId());
     }
 
     private UaFolderNode folder(String id, NodeId parent) {

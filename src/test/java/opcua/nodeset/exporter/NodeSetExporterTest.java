@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import org.eclipse.milo.opcua.stack.core.NodeIds;
@@ -104,8 +105,35 @@ class NodeSetExporterTest {
     for (String opt :
         List.of(
             "--endpoint", "--root", "--out", "--name", "--browse-batch", "--read-batch",
-            "--max-nodes", "--csv-separator", "--keep-endpoint-host", "--progress-seconds")) {
+            "--max-nodes", "--csv-separator", "--keep-endpoint-host", "--progress-seconds",
+            "--namespace", "--model-version", "--publication-date", "--report")) {
       assertTrue(NodeSetExporter.USAGE.contains(opt), opt);
     }
+  }
+
+  @Test
+  void modelAndReportOptions() {
+    var none = parse("--endpoint", "x");
+    assertEquals(null, none.namespaceUri());
+    assertEquals(null, none.modelVersion());
+    assertEquals(null, none.publicationDate());
+    assertFalse(none.report());
+
+    var o =
+        parse(
+            "--endpoint", "x", "--namespace", "urn:a", "--model-version", "1.0.0",
+            "--publication-date", "2026-01-31", "--report");
+    assertEquals("urn:a", o.namespaceUri());
+    assertEquals("1.0.0", o.modelVersion());
+    assertEquals(Instant.parse("2026-01-31T00:00:00Z"), o.publicationDate());
+    assertTrue(o.report());
+
+    assertEquals(
+        Instant.parse("2026-01-31T10:15:00Z"),
+        parse("--endpoint", "x", "--publication-date", "2026-01-31T10:15:00Z").publicationDate());
+    assertEquals(
+        "invalid date for --publication-date: 31/01/2026",
+        error("--endpoint", "x", "--publication-date", "31/01/2026"));
+    assertEquals("missing value for --namespace", error("--endpoint", "x", "--namespace"));
   }
 }

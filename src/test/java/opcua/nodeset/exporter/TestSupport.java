@@ -28,7 +28,34 @@ final class TestSupport {
     schema.newValidator().validate(new StreamSource(file.toFile()));
   }
 
-  record NodeSet(List<String> namespaceUris, Map<String, Element> nodes) {
+  record NodeSet(List<String> namespaceUris, Map<String, Element> nodes, Map<String, List<String>> models) {
+
+    Element definition(String nodeId) {
+      NodeList l = node(nodeId).getElementsByTagNameNS(NodeSetXmlWriter.UA_NODESET_NS, "Definition");
+      return l.getLength() == 0 ? null : (Element) l.item(0);
+    }
+
+    List<Map<String, String>> fields(String nodeId) {
+      List<Map<String, String>> out = new ArrayList<>();
+      NodeList l = definition(nodeId).getElementsByTagNameNS(NodeSetXmlWriter.UA_NODESET_NS, "Field");
+      for (int i = 0; i < l.getLength(); i++) {
+        Element f = (Element) l.item(i);
+        Map<String, String> m = new LinkedHashMap<>();
+        for (int a = 0; a < f.getAttributes().getLength(); a++) {
+          m.put(f.getAttributes().item(a).getNodeName(), f.getAttributes().item(a).getNodeValue());
+        }
+        NodeList dn = f.getElementsByTagNameNS(NodeSetXmlWriter.UA_NODESET_NS, "DisplayName");
+        if (dn.getLength() > 0) {
+          m.put("DisplayName", dn.item(0).getTextContent());
+        }
+        NodeList ds = f.getElementsByTagNameNS(NodeSetXmlWriter.UA_NODESET_NS, "Description");
+        if (ds.getLength() > 0) {
+          m.put("Description", ds.item(0).getTextContent());
+        }
+        out.add(m);
+      }
+      return out;
+    }
 
     Element node(String nodeId) {
       Element e = nodes.get(nodeId);
@@ -61,6 +88,7 @@ final class TestSupport {
     Document doc = f.newDocumentBuilder().parse(file.toFile());
     List<String> uris = new ArrayList<>();
     Map<String, Element> nodes = new LinkedHashMap<>();
+    Map<String, List<String>> models = new LinkedHashMap<>();
     for (Node n = doc.getDocumentElement().getFirstChild(); n != null; n = n.getNextSibling()) {
       if (!(n instanceof Element e)) {
         continue;
@@ -70,13 +98,28 @@ final class TestSupport {
         for (int i = 0; i < l.getLength(); i++) {
           uris.add(l.item(i).getTextContent());
         }
+      } else if (e.getLocalName().equals("Models")) {
+        NodeList l = e.getElementsByTagNameNS(NodeSetXmlWriter.UA_NODESET_NS, "Model");
+        for (int i = 0; i < l.getLength(); i++) {
+          Element m = (Element) l.item(i);
+          List<String> required = new ArrayList<>();
+          NodeList r = m.getElementsByTagNameNS(NodeSetXmlWriter.UA_NODESET_NS, "RequiredModel");
+          for (int k = 0; k < r.getLength(); k++) {
+            required.add(modelKey((Element) r.item(k)));
+          }
+          models.put(modelKey(m), required);
+        }
       } else {
         if (nodes.put(e.getAttribute("NodeId"), e) != null) {
           throw new AssertionError("duplicate NodeId " + e.getAttribute("NodeId"));
         }
       }
     }
-    return new NodeSet(uris, nodes);
+    return new NodeSet(uris, nodes, models);
+  }
+
+  private static String modelKey(Element m) {
+    return m.getAttribute("ModelUri") + "|" + m.getAttribute("Version") + "|" + m.getAttribute("PublicationDate");
   }
 
   static String withoutTimestamp(Path file) throws IOException {

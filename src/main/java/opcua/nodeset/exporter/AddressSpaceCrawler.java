@@ -38,6 +38,10 @@ import org.eclipse.milo.opcua.stack.core.types.structured.BrowseDescription;
 import org.eclipse.milo.opcua.stack.core.types.structured.BrowseNextResponse;
 import org.eclipse.milo.opcua.stack.core.types.structured.BrowseResponse;
 import org.eclipse.milo.opcua.stack.core.types.structured.BrowseResult;
+import org.eclipse.milo.opcua.stack.core.types.structured.DataTypeDefinition;
+import org.eclipse.milo.opcua.stack.core.types.structured.EnumDefinition;
+import org.eclipse.milo.opcua.stack.core.types.structured.EnumField;
+import org.eclipse.milo.opcua.stack.core.types.structured.EnumValueType;
 import org.eclipse.milo.opcua.stack.core.types.structured.EUInformation;
 import org.eclipse.milo.opcua.stack.core.types.structured.Range;
 import org.eclipse.milo.opcua.stack.core.types.structured.ReadResponse;
@@ -70,8 +74,14 @@ final class AddressSpaceCrawler {
   private UInteger maxReferencesPerNode = uint(0);
   private int noContinuationPointRetries;
 
+  private int namespaceFilter = -1;
+
   private boolean truncated;
   private int skippedReferences;
+  private int skippedNodes;
+  private final Map<NodeId, String> definitionsFromProperties = new HashMap<>();
+  private final Set<NodeId> hierarchicalTypes = new HashSet<>();
+  private int encodingNodes;
   private long browseNanos;
   private long readNanos;
   private final Map<Integer, long[]> perNamespace = new TreeMap<>();
@@ -101,6 +111,29 @@ final class AddressSpaceCrawler {
     this.maxReferencesPerNode = uint(max);
   }
 
+  void setNamespaceFilter(int serverNamespaceIndex) {
+    if (serverNamespaceIndex <= 0) {
+      throw new IllegalArgumentException("namespace index must be > 0");
+    }
+    this.namespaceFilter = serverNamespaceIndex;
+  }
+
+  int skippedNodes() {
+    return skippedNodes;
+  }
+
+  Map<NodeId, String> definitionsFromProperties() {
+    return Map.copyOf(definitionsFromProperties);
+  }
+
+  Set<NodeId> hierarchicalReferenceTypes() {
+    return Set.copyOf(hierarchicalTypes);
+  }
+
+  int encodingNodes() {
+    return encodingNodes;
+  }
+
   int noContinuationPointRetries() {
     return noContinuationPointRetries;
   }
@@ -123,6 +156,11 @@ final class AddressSpaceCrawler {
 
   static boolean isExported(NodeId nodeId) {
     return nodeId.getNamespaceIndex().intValue() != 0;
+  }
+
+  boolean exports(NodeId nodeId) {
+    return isExported(nodeId)
+        && (namespaceFilter < 0 || nodeId.getNamespaceIndex().intValue() == namespaceFilter);
   }
 
   private record Pending(
@@ -162,7 +200,7 @@ final class AddressSpaceCrawler {
                 true,
                 ALL_NODE_CLASSES,
                 RESULT_MASK_ALL));
-        if (isExported(p.nodeId())) {
+        if (exports(p.nodeId())) {
           descriptions.add(
               new BrowseDescription(
                   p.nodeId(),
@@ -179,6 +217,9 @@ final class AddressSpaceCrawler {
       int i = 0;
       for (Pending p : batch) {
         for (ReferenceDescription rd : results.get(i++)) {
+          if (rd.getReferenceTypeId() != null) {
+            hierarchicalTypes.add(rd.getReferenceTypeId());
+          }
           Optional<NodeId> target = rd.getNodeId().toNodeId(namespaceTable);
           if (target.isEmpty() || visited.contains(target.get())) {
             continue;
@@ -194,8 +235,33 @@ final class AddressSpaceCrawler {
               new Pending(
                   target.get(), rd.getNodeClass(), rd.getBrowseName(), rd.getDisplayName(), path));
         }
-        if (isExported(p.nodeId())) {
-          found.add(new Found(p, toRefs(results.get(i++))));
+        if (exports(p.nodeId())) {
+          List<ReferenceDescription> all = results.get(i++);
+          if (p.nodeClass() == NodeClass.DataType) {
+            // DataTypeEncoding nodes hang on their DataType through the non-hierarchical
+            // HasEncoding: the hierarchical crawl never reaches them.
+            for (ReferenceDescription rd : all) {
+              if (!Boolean.TRUE.equals(rd.getIsForward()) || !NodeIds.HasEncoding.equals(rd.getReferenceTypeId())) {
+                continue;
+              }
+              Optional<NodeId> target = rd.getNodeId().toNodeId(namespaceTable);
+              if (target.isEmpty() || visited.contains(target.get()) || !exports(target.get())) {
+                continue;
+              }
+              if (maxNodes > 0 && visited.size() >= maxNodes) {
+                truncated = true;
+                break;
+              }
+              visited.add(target.get());
+              encodingNodes++;
+              String path = p.path() + "/" + name(rd.getBrowseName());
+              countVisited(target.get(), path);
+              queue.add(
+                  new Pending(
+                      target.get(), rd.getNodeClass(), rd.getBrowseName(), rd.getDisplayName(), path));
+            }
+          }
+          found.add(new Found(p, toRefs(all)));
           perNamespace.get(p.nodeId().getNamespaceIndex().intValue())[1]++;
         }
       }
@@ -209,8 +275,8 @@ final class AddressSpaceCrawler {
     }
     browseNanos = progress.elapsedNanos();
     LOG.info(
-        "Browse done in {}: visited={} exported={}",
-        Progress.hms(browseNanos), visited.size(), found.size());
+        "Browse done in {}: visited={} exported={} (DataTypeEncoding nodes via HasEncoding: {})",
+        Progress.hms(browseNanos), visited.size(), found.size(), encodingNodes);
     for (Map.Entry<Integer, long[]> e : perNamespace.entrySet()) {
       LOG.info(
           "  ns={} {}: visited={} exported={}",
@@ -404,6 +470,9 @@ final class AddressSpaceCrawler {
     // EngineeringUnits / EURange property nodes, by owning variable.
     Map<NodeId, NodeId> euProperty = new HashMap<>();
     Map<NodeId, NodeId> rangeProperty = new HashMap<>();
+    // EnumStrings / EnumValues property nodes, by owning DataType without a DataTypeDefinition.
+    Map<NodeId, NodeId> enumStringsProperty = new HashMap<>();
+    Map<NodeId, NodeId> enumValuesProperty = new HashMap<>();
 
     List<Map<AttributeId, Object>> attributeMaps = new ArrayList<>(found.size());
     List<Boolean> readable = new ArrayList<>(found.size());
@@ -424,10 +493,25 @@ final class AddressSpaceCrawler {
       if (!(attrs.get(AttributeId.WriteMask) instanceof UInteger)) {
         attrs.remove(AttributeId.WriteMask);
       }
+      decodeDefinition(found.get(i).pending().nodeId(), attrs);
       attributeMaps.add(attrs);
       readable.add(anyGood);
       if (attrs.get(AttributeId.DataType) instanceof NodeId dt) {
         dataTypeNames.put(dt, null);
+      }
+      if (classes.get(i) == NodeClass.DataType && !(attrs.get(AttributeId.DataTypeDefinition) instanceof DataTypeDefinition)) {
+        for (ExportedNode.Ref r : found.get(i).refs()) {
+          if (r.forward() && NodeIds.HasProperty.equals(r.referenceTypeId())) {
+            QualifiedName qn = r.targetBrowseName();
+            if (qn != null && qn.namespaceIndex().intValue() == 0) {
+              if ("EnumStrings".equals(qn.name())) {
+                enumStringsProperty.put(found.get(i).pending().nodeId(), r.targetId());
+              } else if ("EnumValues".equals(qn.name())) {
+                enumValuesProperty.put(found.get(i).pending().nodeId(), r.targetId());
+              }
+            }
+          }
+        }
       }
       if (classes.get(i) == NodeClass.Variable) {
         for (ExportedNode.Ref r : found.get(i).refs()) {
@@ -448,6 +532,20 @@ final class AddressSpaceCrawler {
     readDataTypeNames(dataTypeNames);
     Map<NodeId, Object> euValues = readPropertyValues("EngineeringUnits (3/3)", euProperty);
     Map<NodeId, Object> rangeValues = readPropertyValues("EURange (3/3)", rangeProperty);
+    Map<NodeId, Object> enumValues = readPropertyValues("EnumValues (3/3)", enumValuesProperty);
+    Map<NodeId, Object> enumStrings = readPropertyValues("EnumStrings (3/3)", enumStringsProperty);
+    for (int i = 0; i < found.size(); i++) {
+      NodeId id = found.get(i).pending().nodeId();
+      EnumDefinition fromValues = enumDefinitionFromEnumValues(enumValues.get(id));
+      EnumDefinition fromStrings = enumDefinitionFromEnumStrings(enumStrings.get(id));
+      if (fromValues != null) {
+        attributeMaps.get(i).put(AttributeId.DataTypeDefinition, fromValues);
+        definitionsFromProperties.put(id, "EnumValues");
+      } else if (fromStrings != null) {
+        attributeMaps.get(i).put(AttributeId.DataTypeDefinition, fromStrings);
+        definitionsFromProperties.put(id, "EnumStrings");
+      }
+    }
 
     List<ExportedNode> nodes = new ArrayList<>(found.size());
     for (int i = 0; i < found.size(); i++) {
@@ -462,6 +560,7 @@ final class AddressSpaceCrawler {
       // no Good read is not readable by this session (e.g. Bad_UserAccessDenied).
       if (!readable.get(i)) {
         LOG.warn("Skipped {}: attributes not readable", nodeId.toParseableString());
+        skippedNodes++;
         continue;
       }
       Map<AttributeId, Object> attrs = attributeMaps.get(i);
@@ -551,7 +650,8 @@ final class AddressSpaceCrawler {
               AttributeId.MinimumSamplingInterval,
               AttributeId.Historizing);
       case Method -> List.of(AttributeId.Executable);
-      case ObjectType, DataType -> List.of(AttributeId.IsAbstract);
+      case ObjectType -> List.of(AttributeId.IsAbstract);
+      case DataType -> List.of(AttributeId.IsAbstract, AttributeId.DataTypeDefinition);
       case VariableType ->
           List.of(
               AttributeId.IsAbstract,
@@ -590,7 +690,9 @@ final class AddressSpaceCrawler {
     Map<NodeId, Object> out = new HashMap<>();
     for (int i = 0; i < owners.size(); i++) {
       Object v = good(values.get(i));
-      if (v instanceof ExtensionObject xo) {
+      if (v instanceof ExtensionObject[] array) {
+        v = decodeAll(array, owners.get(i));
+      } else if (v instanceof ExtensionObject xo) {
         try {
           v = xo.decode(client.getStaticEncodingContext());
         } catch (RuntimeException e) {
@@ -603,6 +705,61 @@ final class AddressSpaceCrawler {
       }
     }
     return out;
+  }
+
+  private Object[] decodeAll(ExtensionObject[] array, NodeId owner) {
+    Object[] out = new Object[array.length];
+    for (int k = 0; k < array.length; k++) {
+      try {
+        out[k] = array[k] == null ? null : array[k].decode(client.getStaticEncodingContext());
+      } catch (RuntimeException e) {
+        LOG.debug("Cannot decode property of {}: {}", owner.toParseableString(), e.toString());
+        return null;
+      }
+    }
+    return out;
+  }
+
+  private void decodeDefinition(NodeId nodeId, Map<AttributeId, Object> attrs) {
+    if (attrs.get(AttributeId.DataTypeDefinition) instanceof ExtensionObject xo) {
+      try {
+        attrs.put(AttributeId.DataTypeDefinition, xo.decode(client.getStaticEncodingContext()));
+      } catch (RuntimeException e) {
+        LOG.warn("Cannot decode DataTypeDefinition of {}: {}", nodeId.toParseableString(), e.toString());
+        attrs.remove(AttributeId.DataTypeDefinition);
+      }
+    }
+    if (attrs.containsKey(AttributeId.DataTypeDefinition)
+        && !(attrs.get(AttributeId.DataTypeDefinition) instanceof DataTypeDefinition)) {
+      attrs.remove(AttributeId.DataTypeDefinition);
+    }
+  }
+
+  static EnumDefinition enumDefinitionFromEnumValues(Object value) {
+    if (!(value instanceof Object[] array) || array.length == 0) {
+      return null;
+    }
+    EnumField[] fields = new EnumField[array.length];
+    for (int k = 0; k < array.length; k++) {
+      if (!(array[k] instanceof EnumValueType ev)) {
+        return null;
+      }
+      String name = ev.getDisplayName() == null ? null : ev.getDisplayName().text();
+      fields[k] = new EnumField(ev.getValue(), ev.getDisplayName(), ev.getDescription(), name);
+    }
+    return new EnumDefinition(fields);
+  }
+
+  static EnumDefinition enumDefinitionFromEnumStrings(Object value) {
+    if (!(value instanceof LocalizedText[] array) || array.length == 0) {
+      return null;
+    }
+    EnumField[] fields = new EnumField[array.length];
+    for (int k = 0; k < array.length; k++) {
+      LocalizedText lt = array[k] == null ? LocalizedText.NULL_VALUE : array[k];
+      fields[k] = new EnumField((long) k, lt, LocalizedText.NULL_VALUE, lt.text());
+    }
+    return new EnumDefinition(fields);
   }
 
   private List<DataValue> readAll(String label, List<ReadValueId> ids) throws UaException {

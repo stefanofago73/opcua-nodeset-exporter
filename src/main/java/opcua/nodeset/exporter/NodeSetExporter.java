@@ -5,8 +5,14 @@ import static org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.Unsigned.
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Stream;
 import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
@@ -19,6 +25,7 @@ import org.eclipse.milo.opcua.stack.core.security.SecurityPolicy;
 import org.eclipse.milo.opcua.stack.core.types.builtin.LocalizedText;
 import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
+import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UShort;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.UserTokenType;
 import org.eclipse.milo.opcua.stack.core.types.structured.EndpointDescription;
 import org.eclipse.milo.opcua.stack.core.types.structured.UserTokenPolicy;
@@ -45,6 +52,10 @@ public final class NodeSetExporter {
         --csv-separator <c>   CSV separator (default: ;)
         --progress-seconds <n> seconds between progress lines, >= 1 (default: 3)
         --keep-endpoint-host  use the host advertised by the server instead of the one in --endpoint
+        --namespace <uri>     export only the nodes of this namespace (one Model in the NodeSet)
+        --model-version <v>   Model Version when the server NamespaceMetadata has none
+        --publication-date <d> Model PublicationDate when the server has none (2026-01-31 or ISO-8601 instant)
+        --report              also write <out>/<name>.report.md (checks, Models, DataTypes)
 
       Output: <out>/<name>.NodeSet2.xml and <out>/<name>.tags.csv
       Only SecurityPolicy None with anonymous identity is supported.
@@ -60,7 +71,11 @@ public final class NodeSetExporter {
       int maxNodes,
       char csvSeparator,
       boolean keepEndpointHost,
-      int progressSeconds) {}
+      int progressSeconds,
+      String namespaceUri,
+      String modelVersion,
+      Instant publicationDate,
+      boolean report) {}
 
   private NodeSetExporter() {}
 
@@ -94,6 +109,10 @@ public final class NodeSetExporter {
     char separator = ';';
     boolean keepHost = false;
     int progressSeconds = 3;
+    String namespaceUri = null;
+    String modelVersion = null;
+    Instant publicationDate = null;
+    boolean report = false;
 
     for (int i = 0; i < args.length; i++) {
       String a = args[i];
@@ -121,6 +140,10 @@ public final class NodeSetExporter {
         }
         case "--keep-endpoint-host" -> keepHost = true;
         case "--progress-seconds" -> progressSeconds = intValue(args, ++i, a, 1);
+        case "--namespace" -> namespaceUri = value(args, ++i, a);
+        case "--model-version" -> modelVersion = value(args, ++i, a);
+        case "--publication-date" -> publicationDate = dateValue(value(args, ++i, a));
+        case "--report" -> report = true;
         default -> throw new IllegalArgumentException("unknown option: " + a);
       }
     }
@@ -132,7 +155,15 @@ public final class NodeSetExporter {
     }
     return new Options(
         endpoint, List.copyOf(roots), outDir, name, browseBatch, readBatch, maxNodes, separator,
-        keepHost, progressSeconds);
+        keepHost, progressSeconds, namespaceUri, modelVersion, publicationDate, report);
+  }
+
+  static Instant dateValue(String s) {
+    try {
+      return s.length() == 10 ? LocalDate.parse(s).atStartOfDay(ZoneOffset.UTC).toInstant() : Instant.parse(s);
+    } catch (DateTimeParseException e) {
+      throw new IllegalArgumentException("invalid date for --publication-date: " + s);
+    }
   }
 
   private static String value(String[] args, int i, String option) {
@@ -169,9 +200,22 @@ public final class NodeSetExporter {
       int readBatch = batches[1];
       LOG.info("Batch sizes: browse={}, read={}", browseBatch, readBatch);
 
+      Map<String, NamespaceMetadataReader.ModelInfo> metadata =
+          NamespaceMetadataReader.read(client, namespaces);
+
       var crawler =
           new AddressSpaceCrawler(
               client, namespaces, browseBatch, readBatch, o.maxNodes(), o.progressSeconds());
+      if (o.namespaceUri() != null) {
+        UShort index = namespaces.getIndex(o.namespaceUri());
+        if (index == null || index.intValue() == 0) {
+          throw new IllegalArgumentException(
+              "--namespace " + o.namespaceUri() + " is not an exportable namespace of the server; server namespaces: "
+                  + Arrays.toString(namespaces.toArray()));
+        }
+        crawler.setNamespaceFilter(index.intValue());
+        LOG.info("Exporting only namespace ns={} {}", index, o.namespaceUri());
+      }
       List<ExportedNode> nodes = crawler.crawl(o.roots());
 
       Files.createDirectories(o.outDir());
@@ -181,8 +225,13 @@ public final class NodeSetExporter {
       Progress write = new Progress(o.progressSeconds());
       LOG.info("Write NodeSet {} ...", xml.getFileName());
       Progress step = new Progress(o.progressSeconds());
-      new NodeSetXmlWriter(namespaces).write(nodes, xml);
+      var writer =
+          new NodeSetXmlWriter(
+              namespaces, metadata, new NodeSetXmlWriter.ModelDefaults(o.modelVersion(), o.publicationDate()));
+      writer.addHierarchicalReferenceTypes(crawler.hierarchicalReferenceTypes());
+      writer.write(nodes, xml);
       LOG.info("Write NodeSet done in {} ({})", step.elapsed(), size(xml));
+      logModels(writer.models());
       LOG.info("Write CSV {} ...", csv.getFileName());
       step = new Progress(o.progressSeconds());
       int tags = new TagMappingCsvWriter(namespaces, o.csvSeparator()).write(nodes, csv);
@@ -197,12 +246,41 @@ public final class NodeSetExporter {
       if (crawler.isTruncated()) {
         LOG.warn("Crawl stopped at --max-nodes={}: the export is INCOMPLETE", o.maxNodes());
       }
+      if (o.report()) {
+        Path md = o.outDir().resolve(o.name() + ".report.md");
+        String error = ExportReport.validate(xml);
+        if (error != null) {
+          LOG.warn("NodeSet is not valid against UANodeSet.xsd: {}", error);
+        }
+        ExportReport.write(
+            new ExportReport.Input(
+                o.endpoint(), o.namespaceUri(), xml, csv, namespaces, nodes, writer.namespaceUris(),
+                writer.models(), crawler.definitionsFromProperties(), crawler.skippedNodes(),
+                crawler.skippedReferences(), crawler.isTruncated()),
+            error,
+            md);
+        LOG.info("Report written to {}", md.toAbsolutePath());
+      }
       LOG.info(
           "Done in {} (connect {}, browse {}, read {}, write {})",
           total.elapsed(), Progress.hms(connectNanos), Progress.hms(crawler.browseNanos()),
           Progress.hms(crawler.readNanos()), Progress.hms(writeNanos));
     } finally {
       client.disconnect();
+    }
+  }
+
+  private static void logModels(List<NodeSetXmlWriter.Model> models) {
+    for (NodeSetXmlWriter.Model m : models) {
+      LOG.info(
+          "Model {} Version={} ({}) PublicationDate={} ({})",
+          m.uri(), m.version(), m.versionSource(), m.publicationDate(), m.dateSource());
+      if (m.publicationDate() == null) {
+        LOG.warn("Model {} has no PublicationDate: the UA Cloud Library rejects it (use --publication-date)", m.uri());
+      }
+    }
+    if (models.size() > 1) {
+      LOG.warn("{} Models in the NodeSet: the UA Cloud Library accepts exactly one (use --namespace)", models.size());
     }
   }
 

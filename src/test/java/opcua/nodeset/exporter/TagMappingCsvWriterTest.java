@@ -40,7 +40,7 @@ class TagMappingCsvWriterTest {
         NodeClass.Variable,
         new QualifiedName(2, id),
         LocalizedText.english("Display " + id),
-        description == null ? LocalizedText.NULL_VALUE : new LocalizedText("it", description),
+        description == null ? LocalizedText.NULL_VALUE : new LocalizedText("en-GB", description),
         "Root/Objects/" + id,
         a,
         List.of(),

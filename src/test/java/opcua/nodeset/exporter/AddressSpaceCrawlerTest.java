@@ -23,6 +23,8 @@ import org.eclipse.milo.opcua.stack.core.types.builtin.LocalizedText;
 import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
 import org.eclipse.milo.opcua.stack.core.types.builtin.QualifiedName;
 import org.eclipse.milo.opcua.stack.core.types.enumerated.NodeClass;
+import org.eclipse.milo.opcua.stack.core.types.structured.EnumDefinition;
+import org.eclipse.milo.opcua.stack.core.types.structured.EnumValueType;
 import org.eclipse.milo.opcua.stack.core.types.structured.ReferenceDescription;
 import org.junit.jupiter.api.Test;
 
@@ -45,7 +47,9 @@ class AddressSpaceCrawlerTest {
         AddressSpaceCrawler.specificAttributes(NodeClass.Variable));
     assertEquals(List.of(AttributeId.Executable), AddressSpaceCrawler.specificAttributes(NodeClass.Method));
     assertEquals(List.of(AttributeId.IsAbstract), AddressSpaceCrawler.specificAttributes(NodeClass.ObjectType));
-    assertEquals(List.of(AttributeId.IsAbstract), AddressSpaceCrawler.specificAttributes(NodeClass.DataType));
+    assertEquals(
+        List.of(AttributeId.IsAbstract, AttributeId.DataTypeDefinition),
+        AddressSpaceCrawler.specificAttributes(NodeClass.DataType));
     assertEquals(
         List.of(AttributeId.IsAbstract, AttributeId.DataType, AttributeId.ValueRank, AttributeId.ArrayDimensions),
         AddressSpaceCrawler.specificAttributes(NodeClass.VariableType));
@@ -165,5 +169,35 @@ class AddressSpaceCrawlerTest {
     assertEquals(new NodeId(2, "b"), calls.get(0).get(0).getNodeId());
     assertEquals(AttributeId.NodeClass.uid(), calls.get(0).get(0).getAttributeId());
     assertEquals(Arrays.asList(NodeClass.Object, NodeClass.Variable, null, null, null), r);
+  }
+
+  @Test
+  void enumDefinitionFromEnumStringsUsesTheIndexAsValue() {
+    EnumDefinition d =
+        AddressSpaceCrawler.enumDefinitionFromEnumStrings(
+            new LocalizedText[] {LocalizedText.english("Off"), LocalizedText.english("On")});
+    assertEquals(2, d.getFields().length);
+    assertEquals(0L, d.getFields()[0].getValue());
+    assertEquals("Off", d.getFields()[0].getName());
+    assertEquals(1L, d.getFields()[1].getValue());
+    assertEquals("On", d.getFields()[1].getDisplayName().text());
+    assertEquals(null, AddressSpaceCrawler.enumDefinitionFromEnumStrings(new LocalizedText[0]));
+    assertEquals(null, AddressSpaceCrawler.enumDefinitionFromEnumStrings("x"));
+  }
+
+  @Test
+  void enumDefinitionFromEnumValuesKeepsValuesAndTexts() {
+    EnumDefinition d =
+        AddressSpaceCrawler.enumDefinitionFromEnumValues(
+            new Object[] {
+              new EnumValueType(5L, LocalizedText.english("Five"), LocalizedText.english("five")),
+              new EnumValueType(9L, LocalizedText.english("Nine"), LocalizedText.NULL_VALUE)
+            });
+    assertEquals(5L, d.getFields()[0].getValue());
+    assertEquals("Five", d.getFields()[0].getName());
+    assertEquals("five", d.getFields()[0].getDescription().text());
+    assertEquals(9L, d.getFields()[1].getValue());
+    assertEquals(null, AddressSpaceCrawler.enumDefinitionFromEnumValues(new Object[] {"not an EnumValueType"}));
+    assertEquals(null, AddressSpaceCrawler.enumDefinitionFromEnumValues(null));
   }
 }
