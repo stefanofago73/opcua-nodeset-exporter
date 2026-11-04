@@ -6,7 +6,7 @@
 
   <groupId>opcua.nodeset</groupId>
   <artifactId>opcua-nodeset-exporter</artifactId>
-  <version>1.0.0</version>
+  <version>1.1.0</version>
   <name>opcua-nodeset-exporter</name>
   <description>Exports the address space of an OPC UA server as NodeSet2.xml and a CSV tag mapping (Eclipse Milo client).</description>
 

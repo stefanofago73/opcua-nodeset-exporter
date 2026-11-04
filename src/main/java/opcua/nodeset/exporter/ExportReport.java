@@ -103,9 +103,9 @@ final class ExportReport {
     out.add("| Check | Result | Needed by |");
     out.add("|---|---|---|");
     out.add(row("Schema UANodeSet.xsd", validationError == null ? "OK" : "FAILED", "every tool"));
-    out.add(row("Models present", yesNo(!models.isEmpty()), "ModelCompiler, Cloud Library"));
-    out.add(row("Exactly one Model", yesNo(models.size() == 1) + " (" + models.size() + ")", "Cloud Library (use --namespace)"));
-    out.add(row("PublicationDate on every Model", yesNo(allDates), "Cloud Library"));
+    out.add(row("Models present", yesNo(!models.isEmpty()), "model compilers, model repositories"));
+    out.add(row("Exactly one Model", yesNo(models.size() == 1) + " (" + models.size() + ")", "model repositories (use --namespace)"));
+    out.add(row("PublicationDate on every Model", yesNo(allDates), "model repositories"));
     out.add(
         row(
             "DataTypes with Definition",

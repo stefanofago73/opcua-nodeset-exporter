@@ -276,11 +276,11 @@ public final class NodeSetExporter {
           "Model {} Version={} ({}) PublicationDate={} ({})",
           m.uri(), m.version(), m.versionSource(), m.publicationDate(), m.dateSource());
       if (m.publicationDate() == null) {
-        LOG.warn("Model {} has no PublicationDate: the UA Cloud Library rejects it (use --publication-date)", m.uri());
+        LOG.warn("Model {} has no PublicationDate: some model repositories reject it (use --publication-date)", m.uri());
       }
     }
     if (models.size() > 1) {
-      LOG.warn("{} Models in the NodeSet: the UA Cloud Library accepts exactly one (use --namespace)", models.size());
+      LOG.warn("{} Models in the NodeSet: some model repositories accept exactly one (use --namespace)", models.size());
     }
   }
 

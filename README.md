@@ -1,6 +1,6 @@
 # opcua-nodeset-exporter
 
-Experimental Command line tool that connects to an OPC UA server, walks its address space and writes two files:
+Experimental command line tool that connects to an OPC UA server, walks its address space and writes two files (three with `--report`):
 
 - `<name>.NodeSet2.xml`: the node dictionary in UANodeSet format (OPC UA Part 6, Annex F);
 - `<name>.tags.csv`: a tag mapping with one row per variable, ready to open in a spreadsheet;
@@ -68,7 +68,7 @@ At the end `export/machine01.NodeSet2.xml` and `export/machine01.tags.csv` are w
 
 `--model-version`, `--publication-date`: Version and PublicationDate of the written Models when the server does not publish them in `Server/Namespaces` (NamespaceMetadata). Values published by the server always win. A date without time means midnight UTC.
 
-`--report`: also writes `<name>.report.md`: checks (schema validity, Models, PublicationDate, DataTypes with Definition, skipped nodes, crawl completeness), the Models table with the source of each value, node counts per NodeClass and namespace, the DataTypes with their Definition source, and the references to nodes outside the export.
+`--report`: also writes `<name>.report.md`: checks (schema validity, Models, PublicationDate, DataTypes with Definition, skipped nodes, crawl completeness, references to other servers dropped), the Models table with the source of each value, node counts per NodeClass and namespace, the DataTypes with their Definition source, and the references to nodes outside the export.
 
 ## Examples
 
@@ -112,8 +112,8 @@ java -jar target/opcua-nodeset-exporter.jar --endpoint opc.tcp://my-server:4840 
 
 | Code | Meaning |
 |---|---|
-| `0` | Export completed (check the log for WARN lines: skipped nodes, truncated crawl) |
-| `1` | Export failed: connection, server error, unreadable root, write error |
+| `0` | Export completed (check the log for WARN lines: skipped nodes, truncated crawl, Models without PublicationDate or more than one Model, NodeSet not valid with `--report`) |
+| `1` | Export failed: connection, server error, unreadable root, `--namespace` not on the server, write error |
 | `2` | Invalid command line; the usage text is printed |
 
 ## Troubleshooting
@@ -127,6 +127,10 @@ java -jar target/opcua-nodeset-exporter.jar --endpoint opc.tcp://my-server:4840 
 | `Bad_SecurityChecksFailed`, then `Bad_ConnectionClosed` | The server cannot handle large multi-chunk responses: lower `--browse-batch` and `--read-batch` |
 | `the export is INCOMPLETE` | `--max-nodes` reached: run again with a higher value or `0` |
 | `WARN ... Skipped` lines | Nodes visible in Browse but not readable by the anonymous user: left out |
+| `... is not an exportable namespace of the server` | The `--namespace` URI is not in the server NamespaceArray or is the OPC UA namespace: copy the exact URI from the list in the message |
+| `WARN ... has no PublicationDate` | The server publishes no NamespacePublicationDate for that namespace: pass `--publication-date` |
+| `WARN ... Models in the NodeSet` | The export contains more than one namespace: use `--namespace` to get a single Model |
+| `WARN NodeSet is not valid against UANodeSet.xsd` | Written only with `--report`: the schema error is in the Checks section of the report |
 
 ## Progress output
 
@@ -146,12 +150,12 @@ The browse phase shows no percentage: the total is unknown until the tree is ful
 ## How it works
 
 1. Connects with SecurityPolicy None and anonymous identity, then reads the server NamespaceArray.
-2. Browses breadth-first from the roots, following forward `HierarchicalReferences` (subtypes included) in every namespace, with BrowseNext for continuation points; results with `Bad_NoContinuationPoints` are retried one at a time. A visited set prevents loops on cyclic references.
-3. From each exported DataType, also follows the forward `HasEncoding` references, so that its DataTypeEncoding nodes (`Default Binary`, `Default XML`, ...) are exported: the hierarchical crawl does not reach them.
-4. Exports only nodes whose namespace index is not 0: the standard nodes are defined by the base nodeset. The default root `i=84` covers `Objects`, `Types` and `Views`, so vendor ObjectTypes, VariableTypes, DataTypes and ReferenceTypes are included.
-5. For each exported node, browses all its references (forward and inverse) and reads Description, WriteMask and the attributes of its NodeClass. NodeClass, BrowseName and DisplayName are taken from the Browse results. A node with no readable attribute (for example `Bad_UserAccessDenied`) is skipped with a WARN.
-6. For DataTypes, reads the `DataTypeDefinition` attribute (OPC UA 1.04+). When a server does not expose it, the Definition of an enumeration is built from its `EnumValues` or `EnumStrings` property.
-7. Reads `Server/Namespaces` (NamespaceMetadata): NamespaceUri, NamespaceVersion, NamespacePublicationDate of each namespace.
+2. Reads `Server/Namespaces` (NamespaceMetadata): NamespaceUri, NamespaceVersion, NamespacePublicationDate of each namespace.
+3. Browses breadth-first from the roots, following forward `HierarchicalReferences` (subtypes included) in every namespace, with BrowseNext for continuation points; results with `Bad_NoContinuationPoints` are retried one at a time. A visited set prevents loops on cyclic references.
+4. From each exported DataType, also follows the forward `HasEncoding` references, so that its DataTypeEncoding nodes (`Default Binary`, `Default XML`, ...) are exported: the hierarchical crawl does not reach them.
+5. Exports only nodes whose namespace index is not 0: the standard nodes are defined by the base nodeset. The default root `i=84` covers `Objects`, `Types` and `Views`, so vendor ObjectTypes, VariableTypes, DataTypes and ReferenceTypes are included.
+6. For each exported node, browses all its references (forward and inverse) and reads Description, WriteMask and the attributes of its NodeClass. NodeClass, BrowseName and DisplayName are taken from the Browse results. A node with no readable attribute (for example `Bad_UserAccessDenied`) is skipped with a WARN.
+7. For DataTypes, reads the `DataTypeDefinition` attribute (OPC UA 1.04+). When a server does not expose it, the Definition of an enumeration is built from its `EnumValues` or `EnumStrings` property.
 8. Writes the NodeSet with namespace indexes remapped to its own `NamespaceUris` table (server index 2 can become NodeSet index 1), a `Models` table (one Model per exported namespace, each requiring `http://opcfoundation.org/UA/` and the namespaces its nodes use: see Limits), a `Definition` for each DataType whose definition is known, and the CSV with server indexes plus the namespace URI.
 
 Batch sizes are reduced automatically to the server's `OperationLimits` (`MaxNodesPerBrowse`, `MaxNodesPerRead`) when the server publishes them.

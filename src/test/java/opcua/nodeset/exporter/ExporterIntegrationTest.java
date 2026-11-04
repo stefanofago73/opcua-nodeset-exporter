@@ -492,9 +492,9 @@ class ExporterIntegrationTest {
     for (String expected :
         List.of(
             "| Schema UANodeSet.xsd | OK | every tool |",
-            "| Models present | yes | ModelCompiler, Cloud Library |",
-            "| Exactly one Model | yes (1) | Cloud Library (use --namespace) |",
-            "| PublicationDate on every Model | yes | Cloud Library |",
+            "| Models present | yes | model compilers, model repositories |",
+            "| Exactly one Model | yes (1) | model repositories (use --namespace) |",
+            "| PublicationDate on every Model | yes | model repositories |",
             "| DataTypes with Definition | 2 of 2 (simple types: 1) | code generators |",
             "| Nodes skipped (not readable) | 1 | - |",
             "### " + PlantTestServer.NAMESPACE_URI,
