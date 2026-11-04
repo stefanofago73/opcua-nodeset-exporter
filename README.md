@@ -195,6 +195,8 @@ One row per Variable: `NodeId`, `NamespaceUri`, `BrowsePath`, `BrowseName`, `Dis
 
 `PlantTestServer` publishes one namespace with every case the exporter must handle: a reference cycle, a custom hierarchical ReferenceType (nodes reachable only through it), custom ObjectType, VariableType and ReferenceType, a structure DataType with a DataTypeDefinition and an encoding node reachable only through HasEncoding, a simple DataType, an enumeration DataType with only an EnumStrings property, NamespaceMetadata for its namespace, a View, a Method with `Executable=false`, an AnalogItem with EngineeringUnits and EURange, an array variable with special characters in its description, a folder with 25 children, and a node visible in Browse whose attributes are denied. The integration tests also cover BrowseNext, `Bad_NoContinuationPoints` retries, server OperationLimits, `--max-nodes`, `--root`, `--csv-separator`, `--keep-endpoint-host`, `--namespace` (valid and unknown), `--report`, an unreadable root and an unreachable server.
 
+NodeSets tested with the OPC Foundation online [UA NodeSet Editor](https://uanodeseteditor.opcfoundation.org/).
+
 ## License
 
 Apache License 2.0, see [LICENSE](LICENSE). The jar built by `mvnw package` bundles third-party libraries (Eclipse Milo and digitalpetri libraries under EPL-2.0, Netty, Guava and JSpecify under Apache-2.0, Bouncy Castle and SLF4J under MIT) and the OPC Foundation `UANodeSet.xsd` (MIT): see [NOTICE](NOTICE) and the [licenses](licenses) directory.
